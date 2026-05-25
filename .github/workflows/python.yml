@@ -15,5 +15,8 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install libraries
+        run: pip install paramiko
+
       - name: Run
         run: python main.py
